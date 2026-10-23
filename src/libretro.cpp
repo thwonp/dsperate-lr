@@ -270,6 +270,8 @@ RETRO_API void retro_unload_game(void) {
 #endif
   nds.reset();
   state_size = 0;
+  // The frontend may stay up between games: don't keep a state's 6 MB.
+  std::vector<ds::u8>().swap(state_w.data());
 }
 
 RETRO_API unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
