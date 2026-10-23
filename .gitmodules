@@ -1,0 +1,3 @@
+[submodule "DSperate"]
+	path = DSperate
+	url = https://github.com/beebono/DSperate.git
