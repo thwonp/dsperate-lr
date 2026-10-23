@@ -22,9 +22,7 @@ where it runs 2.4-3.2x faster than melonDS DS on the same frames.
 - DSperate's thread pinning and real-time scheduling stay off: pacing and
   thread placement are the frontend's.
 
-Not yet: microphone, DSi mode, cheats, local wireless. A state loaded into a
-running game continues validly but not frame-identically (a fresh load is
-exact).
+Not yet: microphone, DSi mode, cheats, local wireless.
 
 ## Building
 
@@ -35,6 +33,9 @@ exact).
 DSperate commits with each release applies (it was made with GCC 13.3, hence
 the Ubuntu 24.04 image), then links the wrapper. The build prints how much of
 the profile applied; expect 0 functions without theirs.
+
+Fixes that are not in the pinned DSperate yet live in `patches/`; `build.sh`
+applies them to the submodule first (see `patches/README.md`).
 
 ## Licence
 

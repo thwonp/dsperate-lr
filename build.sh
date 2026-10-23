@@ -17,6 +17,14 @@ ROOT=$(cd "$(dirname "$0")" && pwd)
 OUT=${1:-$ROOT/build}
 mkdir -p "$OUT"
 
+# Fixes not upstream yet, onto the pinned DSperate (patches/README.md); one
+# already applied is left alone, so the step can run again.
+for p in "$ROOT"/patches/*.patch; do
+  [ -e "$p" ] || continue
+  git -C "$ROOT/DSperate" apply --reverse --check "$p" 2>/dev/null && continue
+  git -C "$ROOT/DSperate" apply "$p" && echo "patched: $(basename "$p")"
+done
+
 cmake -S "$ROOT/DSperate" -B "$OUT/dsperate" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/DSperate/cmake/aarch64-linux-gnu.cmake" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PROJECT_INCLUDE="$ROOT/cmake/dsperate-pic.cmake" \

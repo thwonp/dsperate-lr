@@ -1,0 +1,17 @@
+diff --git a/src/core/gpu/gpu3d.cpp b/src/core/gpu/gpu3d.cpp
+index 5c4076c..7a82471 100644
+--- a/src/core/gpu/gpu3d.cpp
++++ b/src/core/gpu/gpu3d.cpp
+@@ -1387,6 +1387,12 @@ template <class S> void Gpu3D::sync_state(S& s) {
+   u32 inflight = inflight_n_;
+   s.put(inflight);
+   if constexpr (S::reading) { if (inflight > 32) { s.fail("gx in-flight parameters"); return; } inflight_n_ = inflight; cmd_n_ = par_n_ = 0; }
++  // swap_busy_until_ is a time on the scheduler's clock and is not saved: a
++  // state loaded into a machine that ran on past it would see GXSTAT busy
++  // until the old timeline's time comes round again, and a game waiting on
++  // it stalls (Metroid Prime Hunters: frozen 3D, diverged from frame 4). A
++  // fresh machine has it 0; so does a load.
++  if constexpr (S::reading) swap_busy_until_ = 0;
+   for (u32 i = 0; i < inflight; ++i) s.put(par_log_[i]);
+   s.fields(inflight_cmd_, parse_.num_cmds, parse_.cur_cmd, parse_.param_count, parse_.total_params,
+            gxstat_, geometry_on_, rendering_on_, dispcnt_, alpha_ref_val_, alpha_ref_, toon_, edge_, fog_color_, fog_offset_, fog_density_,
