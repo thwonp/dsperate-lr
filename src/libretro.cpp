@@ -41,6 +41,14 @@ bool jit_on = true;
 uint32_t frame[W * H * 2];
 ds::s16 audio[4096 * 2];
 size_t state_size;   // fixed for the session: libretro states are a fixed size
+
+// The frontend's microphone, when it has one (plorpOS plorpos-3yv.75). Opened
+// the first time the game reads the mic (Io::mic_used), so a game that never
+// listens never holds the device open. Io::set_mic takes any rate.
+constexpr unsigned MIC_RATE = 48000;
+retro_microphone_interface mic_if;
+retro_microphone_t* mic;
+ds::s16 mic_buf[2048];   // a frame is ~802 samples at 48 kHz
 // One writer for every state, cleared rather than rebuilt: its buffer keeps
 // its capacity, so a capture (rewind takes one every few frames) does not
 // grow 6 MB through reallocations each time.
@@ -193,6 +201,18 @@ RETRO_API void retro_run(void) {
   if (down && py >= 0) nds->io.set_touch((px + 0x7fff) * int(W) / 0xffff, py * int(H) / 0x8000, true);
   else nds->io.set_touch(0, 0, false);
 
+  if (!mic && mic_if.open_mic && nds->io.mic_used()) {
+    retro_microphone_params_t p{MIC_RATE};
+    mic = mic_if.open_mic(&p);
+    if (mic && !mic_if.set_mic_state(mic, true)) { mic_if.close_mic(mic); mic = nullptr; }
+    if (!mic) mic_if.open_mic = nullptr;   // once: not again every frame
+    else log(RETRO_LOG_INFO, "dsperate: microphone on\n");
+  }
+  if (mic) {
+    const int n = mic_if.read_mic(mic, mic_buf, sizeof mic_buf / sizeof mic_buf[0]);
+    nds->io.set_mic(n > 0 ? mic_buf : nullptr, n > 0 ? size_t(n) : 0);
+  }
+
   nds->run_frame();
 
   std::memcpy(frame, nds->gpu.framebuffer(0), W * H * 4);
@@ -258,12 +278,16 @@ RETRO_API bool retro_load_game(const retro_game_info* game) {
   }
 #endif
   state_size = 0;
+  mic_if = {};
+  mic_if.interface_version = RETRO_MICROPHONE_INTERFACE_VERSION;
+  if (!env_cb(RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE, &mic_if)) mic_if = {};
   return true;
 }
 
 RETRO_API bool retro_load_game_special(unsigned, const retro_game_info*, size_t) { return false; }
 
 RETRO_API void retro_unload_game(void) {
+  if (mic) { mic_if.close_mic(mic); mic = nullptr; }
   if (!nds) return;
 #if DSPERATE_JIT
   if (jit_on) ds::jit::detach(*nds);

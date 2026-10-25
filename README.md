@@ -22,7 +22,7 @@ where it runs 2.4-3.2x faster than melonDS DS on the same frames.
 - DSperate's thread pinning and real-time scheduling stay off: pacing and
   thread placement are the frontend's.
 
-Not yet: microphone, DSi mode, cheats, local wireless.
+Not yet: DSi mode, cheats, local wireless. The microphone is the frontend's (libretro microphone interface), opened the first time a game listens.
 
 ## Building
 
