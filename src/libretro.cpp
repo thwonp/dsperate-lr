@@ -262,6 +262,28 @@ RETRO_API bool retro_unserialize(const void* data, size_t size) {
 RETRO_API void retro_cheat_reset(void) {}
 RETRO_API void retro_cheat_set(unsigned, bool, const char*) {}
 
+// RetroAchievements' DS map (rcheevos consoleinfo.c): main RAM, then the
+// ARM9's DTCM at the pseudo-address 0x0E000000, as melonDS DS lays it out.
+// Without it the frontend reaches main RAM alone and DTCM sets are disabled.
+// The buffers live as long as nds, so once per game is enough.
+static void register_memory_map() {
+  const size_t ram = nds->bus.main_ram_size();
+  retro_memory_descriptor d[2] = {};
+  d[0].flags = RETRO_MEMDESC_SYSTEM_RAM;
+  d[0].ptr = nds->bus.main_ram.get();
+  d[0].start = 0x02000000;
+  d[0].select = 0xFF000000;
+  d[0].disconnect = 0x00FFFFFF & ~(ram - 1);   // a DS's 4 MB mirrors across the 16 MB window
+  d[0].len = ram;
+  d[1].flags = RETRO_MEMDESC_SYSTEM_RAM;
+  d[1].ptr = nds->bus.dtcm.get();
+  d[1].start = 0x0E000000;
+  d[1].len = ds::mem::Bus::DTCM_SIZE;
+  retro_memory_map map = {d, 2};
+  if (!env_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &map))
+    log(RETRO_LOG_WARN, "dsperate: frontend refused the memory map\n");
+}
+
 RETRO_API bool retro_load_game(const retro_game_info* game) {
   if (!game || !game->path) return false;
   retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;   // DSperate's 0xAARRGGBB, alpha ignored
@@ -271,6 +293,7 @@ RETRO_API bool retro_load_game(const retro_game_info* game) {
   nds = std::make_unique<ds::NDS>();
   if (!boot()) { nds.reset(); return false; }
   load_unlisted_save();
+  register_memory_map();
 #if DSPERATE_JIT
   if (jit_on && !ds::jit::attach(*nds, true, true)) {
     log(RETRO_LOG_WARN, "dsperate: no JIT, interpreting\n");
