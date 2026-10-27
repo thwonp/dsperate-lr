@@ -2,6 +2,7 @@
 # Build dsperate_libretro.so for aarch64 Linux.
 #
 #   ./build.sh [OUT]          inside an environment with the cross toolchain
+#   DSPERATE_TUNE=-mcpu=...   the device's CPU (patches/0002 keeps the profile)
 #                              (Dockerfile: Ubuntu 24.04, GCC 13.3)
 #
 # Two configures. DSperate's own CMake builds its core library with the PGO
@@ -28,7 +29,7 @@ done
 cmake -S "$ROOT/DSperate" -B "$OUT/dsperate" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/DSperate/cmake/aarch64-linux-gnu.cmake" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PROJECT_INCLUDE="$ROOT/cmake/dsperate-pic.cmake" \
-  -DDSPERATE_PGO=use -DDSPERATE_PGO_STRICT=ON \
+  -DDSPERATE_PGO=use -DDSPERATE_PGO_STRICT=ON -DDSPERATE_TUNE="${DSPERATE_TUNE:-}" \
   -DDSPERATE_TESTS=OFF -DDSPERATE_HEADLESS=OFF -DDSPERATE_SDL=OFF \
   -DDSPERATE_CHEEVOS=OFF -DDSPERATE_NET=OFF > "$OUT/dsperate-configure.log"
 cmake --build "$OUT/dsperate" --target dsperate_core 2>&1 \
