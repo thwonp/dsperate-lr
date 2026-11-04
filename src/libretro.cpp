@@ -289,7 +289,20 @@ RETRO_API void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { aud
 RETRO_API void retro_set_input_poll(retro_input_poll_t cb) { input_poll_cb = cb; }
 RETRO_API void retro_set_input_state(retro_input_state_t cb) { input_state_cb = cb; }
 
-RETRO_API void retro_init(void) { ds::set_thread_layout(false); }
+// Idea and approach: nelynes's slotPlus (https://github.com/nelynes/slotPlus).
+// The frontend's "this frame will run late" (the audio buffer status
+// callback's underrun_likely): the GPU then leaves out its 3D raster and line
+// output for the frame (the game, the CPUs and the sound run unchanged), the
+// same frame skip RetroArch drives from the audio buffer. A frontend that
+// never calls it never skips (plorpOS: the Brick and H700 builds of diatom).
+static bool skip_req;
+static void audio_status(bool, unsigned, bool underrun_likely) { skip_req = underrun_likely; }
+
+RETRO_API void retro_init(void) {
+  ds::set_thread_layout(false);
+  retro_audio_buffer_status_callback ab{audio_status};
+  if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK, &ab);
+}
 RETRO_API void retro_deinit(void) {}
 
 RETRO_API void retro_get_system_info(retro_system_info* info) {
@@ -388,6 +401,7 @@ RETRO_API void retro_run(void) {
     ds::input::apply(*nds, in);
   }
 
+  nds->gpu.set_frame_skip(skip_req);
   nds->run_frame();
 
   // The Rumble Pak's motor line: any change is a short pulse (40 ms = 3
