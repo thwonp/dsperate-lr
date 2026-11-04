@@ -28,15 +28,15 @@ where it runs 2.4-3.2x faster than melonDS DS on the same frames.
 
 ## Core options
 
-| option | values | what |
+| option | values (default in bold) | what |
 |---|---|---|
-| `dsperate_jit` | enabled, disabled | JIT recompiler |
-| `dsperate_frameskip` | auto, slotplus, disabled | frame skip when the frontend asks (below): `auto` skips the frames it flags, `slotplus` skips whole display periods |
-| `dsperate_slot2` | empty, rumble pak | slot 2 when no GBA game is chosen. `rumble pak` needs a frontend with a rumble motor. Off by default: a device in slot 2 costs CPU in games that poll the slot (Golden Sun: Dark Dawn on a TrimUI Brick: 0 frame skips without a pak, 456 with one), and DSperate has no list of the games that use it |
-| `dsperate_gba_game` | none, then the GBA games the DS game accepts | the list is rebuilt when a game loads, from `$DSPERATE_GBA_DIR` or the `Game Boy Advance` folder beside the DS one, filtered by DSperate's own dual-slot table. A GBA game's save is `<save dir>/<name>.sav` |
-| `dsperate_guitar_grip` | auto, off | the Grip goes in by itself for the Guitar Hero games; its frets are L, L2, R2, R |
-| `dsperate_solar` | 0-10 | Boktai's light level |
-| `dsperate_analog` | off, then the game's CPAD patches by name | enable one analog (CPAD) patch and feed it the sticks and ZL/ZR. Off by default, as in DSperate's own frontend, where the player enables one; on a handheld whose stick is also the pen cursor both would move |
+| `dsperate_jit` | **enabled**, disabled | JIT recompiler |
+| `dsperate_frameskip` | **auto**, slotplus, disabled | frame skip when the frontend asks (below): `auto` skips the frames it flags, `slotplus` skips whole display periods |
+| `dsperate_slot2` | **empty**, rumble pak | slot 2 when no GBA game is chosen. `rumble pak` needs a frontend with a rumble motor. Off by default: a device in slot 2 costs CPU in games that poll the slot (Golden Sun: Dark Dawn on a TrimUI Brick: 0 frame skips without a pak, 456 with one), and DSperate has no list of the games that use it |
+| `dsperate_gba_game` | **none**, then the GBA games the DS game accepts | the list is rebuilt when a game loads, from `$DSPERATE_GBA_DIR` or the `Game Boy Advance` folder beside the DS one, filtered by DSperate's own dual-slot table. A GBA game's save is `<save dir>/<name>.sav` |
+| `dsperate_guitar_grip` | **auto**, off | the Grip goes in by itself for the Guitar Hero games; its frets are L, L2, R2, R |
+| `dsperate_solar` | 0-4, **5**, 6-10 | Boktai's light level |
+| `dsperate_analog` | **off**, then the game's CPAD patches by name | enable one analog (CPAD) patch and feed it the sticks and ZL/ZR. Off by default, as in DSperate's own frontend, where the player enables one; on a handheld whose stick is also the pen cursor both would move |
 
 A frontend only accepts a stored value the core offers, so `dsperate_gba_game`
 is declared again after the DS game is known and before its value is read.
