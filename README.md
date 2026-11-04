@@ -32,7 +32,7 @@ where it runs 2.4-3.2x faster than melonDS DS on the same frames.
 |---|---|---|
 | `dsperate_jit` | enabled, disabled | JIT recompiler |
 | `dsperate_frameskip` | auto, slotplus, disabled | frame skip when the frontend asks (below): `auto` skips the frames it flags, `slotplus` skips whole display periods |
-| `dsperate_slot2` | auto, rumble pak, empty | slot 2 when no GBA game is chosen: `auto` is a Rumble Pak if the frontend has a rumble motor |
+| `dsperate_slot2` | empty, rumble pak | slot 2 when no GBA game is chosen. `rumble pak` needs a frontend with a rumble motor. Off by default: a device in slot 2 costs CPU in games that poll the slot (Golden Sun: Dark Dawn on a TrimUI Brick: 0 frame skips without a pak, 456 with one), and DSperate has no list of the games that use it |
 | `dsperate_gba_game` | none, then the GBA games the DS game accepts | the list is rebuilt when a game loads, from `$DSPERATE_GBA_DIR` or the `Game Boy Advance` folder beside the DS one, filtered by DSperate's own dual-slot table. A GBA game's save is `<save dir>/<name>.sav` |
 | `dsperate_guitar_grip` | auto, off | the Grip goes in by itself for the Guitar Hero games; its frets are L, L2, R2, R |
 | `dsperate_solar` | 0-10 | Boktai's light level |

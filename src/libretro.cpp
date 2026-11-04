@@ -199,7 +199,7 @@ void declare_options() {
   const retro_variable vars[] = {
     {"dsperate_jit", "JIT recompiler (restart); enabled|disabled"},
     {"dsperate_frameskip", "Frameskip, when the frontend asks for it (restart); auto|slotplus|disabled"},
-    {"dsperate_slot2", "Slot 2 without a GBA game (restart); auto|rumble pak|empty"},
+    {"dsperate_slot2", "Slot 2 without a GBA game (restart); empty|rumble pak"},
     {"dsperate_gba_game", gba_decl.c_str()},
     {"dsperate_guitar_grip", "Guitar Grip for Guitar Hero (restart); auto|off"},
     {"dsperate_solar", "GBA solar sensor light (Boktai); 5|0|1|2|3|4|6|7|8|9|10"},
@@ -235,8 +235,12 @@ void fill_slot2() {
     log(RETRO_LOG_INFO, "dsperate: slot 2: Guitar Grip\n");
     return;
   }
+  // The Rumble Pak is opt-in: no game list says which games use it, and a
+  // device in slot 2 costs real CPU on the games that poll the slot (Golden
+  // Sun: Dark Dawn on the TrimUI Brick: 0 frame skips without it, 456 with it).
+  // DSperate's own frontend inserts it whenever the pad can rumble.
   const std::string m = opt("dsperate_slot2");
-  if (m == "rumble pak" || (m != "empty" && have_rumble)) {
+  if (m == "rumble pak" && have_rumble) {
     nds->slot2 = std::make_unique<ds::slot2::RumblePak>();
     log(RETRO_LOG_INFO, "dsperate: slot 2: Rumble Pak\n");
   }
