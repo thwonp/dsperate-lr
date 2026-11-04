@@ -196,7 +196,7 @@ void declare_options() {
     {"dsperate_gba_game", gba_decl.c_str()},
     {"dsperate_guitar_grip", "Guitar Grip for Guitar Hero (restart); auto|off"},
     {"dsperate_solar", "GBA solar sensor light (Boktai); 5|0|1|2|3|4|6|7|8|9|10"},
-    {"dsperate_analog", "Sticks for analog (CPAD) patches (restart); auto|off"},
+    {"dsperate_analog", "Sticks for analog (CPAD) patches (restart); off|auto"},
     {nullptr, nullptr},
   };
   env_cb(RETRO_ENVIRONMENT_SET_VARIABLES, const_cast<retro_variable*>(vars));
@@ -250,7 +250,9 @@ void setup_analog() {
   nds->cheats.codes = cheats.codes;
   ds::cheat::enforce_exclusive(nds->cheats.codes, cheats.groups);
   const ds::cheat::AnalogRequest req = ds::cheat::analog_request(nds->cheats.codes);
-  const bool on = opt("dsperate_analog") != "off" && req.schemes > 0;
+  // Off unless asked for: on a handheld whose stick is also the pen cursor,
+  // the patch and the cursor would both move.
+  const bool on = opt("dsperate_analog") == "auto" && req.schemes > 0;
   nds->analog_patch = on;
   nds->analog_full = on && req.nub;
   nds->analog_layout = req.extended ? ds::NDS::AnalogLayout::Extended : ds::NDS::AnalogLayout::Packed;
