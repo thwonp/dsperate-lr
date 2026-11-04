@@ -149,6 +149,9 @@ std::string stem_of(const std::string& p) {
   return b.substr(0, b.find_last_of('.'));
 }
 
+ds::cheat::GameCheats analog_cheats;      // the game's analog (CPAD) codes, merged at load
+std::vector<std::string> analog_names;    // their names, the dsperate_analog choices
+
 struct GbaChoice { std::string stem, path; };
 std::vector<GbaChoice> gba_choices;   // the GBA games the loaded DS game reads
 
@@ -190,6 +193,9 @@ void declare_options() {
   static std::string gba_decl;
   gba_decl = "GBA game in slot 2 (restart); none";
   for (const GbaChoice& c : gba_choices) gba_decl += "|" + c.stem;
+  static std::string analog_decl;
+  analog_decl = "Analog (CPAD) patch for the sticks (restart); off";
+  for (const std::string& n : analog_names) analog_decl += "|" + n;
   const retro_variable vars[] = {
     {"dsperate_jit", "JIT recompiler (restart); enabled|disabled"},
     {"dsperate_frameskip", "Frameskip, when the frontend asks for it (restart); auto|disabled"},
@@ -197,7 +203,7 @@ void declare_options() {
     {"dsperate_gba_game", gba_decl.c_str()},
     {"dsperate_guitar_grip", "Guitar Grip for Guitar Hero (restart); auto|off"},
     {"dsperate_solar", "GBA solar sensor light (Boktai); 5|0|1|2|3|4|6|7|8|9|10"},
-    {"dsperate_analog", "Sticks for analog (CPAD) patches (restart); off|auto"},
+    {"dsperate_analog", analog_decl.c_str()},
     {nullptr, nullptr},
   };
   env_cb(RETRO_ENVIRONMENT_SET_VARIABLES, const_cast<retro_variable*>(vars));
@@ -236,33 +242,40 @@ void fill_slot2() {
   }
 }
 
-// Analog patches (shocoman's CPAD codes, built in): the game's entry is merged
-// into the cheat list, its default-enabled code installs the hook, and the
-// frame's sticks go to guest RAM while a patch is on (input::apply).
-void setup_analog() {
-  analog_on = false;
-  if (!nds->cart || nds->dsi) return;
+// Analog patches (shocoman's CPAD codes, built in). A game's catalogue entry
+// is merged into the cheat list at load (scan_analog) so its codes can be
+// offered by name as dsperate_analog; the chosen one is enabled, which
+// installs its hook, and the frame's sticks go to guest RAM while it is on
+// (input::apply). Off unless a code is chosen: DSperate's own frontend makes
+// the player enable one in its Analog Cheats menu, and on a handheld whose
+// stick is also the pen cursor the patch and the cursor would both move.
+void scan_analog() {
+  analog_cheats = {};
+  analog_names.clear();
+  if (!nds || !nds->cart || nds->dsi) return;
   ds::u8 header[512] = {};
   nds->cart->rom_read(0, header, sizeof header);
-  ds::cheat::GameCheats cheats, analog;
+  ds::cheat::GameCheats analog;
   std::string err;
   if (!ds::cheat::load_analog_for_header("", header, analog, err)) return;
-  if (!ds::cheat::merge_analog(cheats, std::move(analog), ds::cheat::header_checksum(header))) return;
-  nds->cheats.codes = cheats.codes;
-  ds::cheat::enforce_exclusive(nds->cheats.codes, cheats.groups);
+  if (!ds::cheat::merge_analog(analog_cheats, std::move(analog), ds::cheat::header_checksum(header))) return;
+  for (const ds::cheat::Code& c : analog_cheats.codes)
+    if (c.analog && !c.is_note() && c.name.find_first_of("|;") == std::string::npos) analog_names.push_back(c.name);
+}
+
+void setup_analog() {
+  analog_on = false;
+  const std::string sel = opt("dsperate_analog");
+  if (analog_names.empty() || sel.empty() || sel == "off") return;
+  for (ds::cheat::Code& c : analog_cheats.codes) c.enabled = c.analog && c.name == sel;
+  nds->cheats.codes = analog_cheats.codes;
   const ds::cheat::AnalogRequest req = ds::cheat::analog_request(nds->cheats.codes);
-  // Off unless asked for: on a handheld whose stick is also the pen cursor,
-  // the patch and the cursor would both move.
-  const bool on = opt("dsperate_analog") == "auto" && req.schemes > 0;
-  nds->analog_patch = on;
-  nds->analog_full = on && req.nub;
+  if (req.schemes != 1) return;
+  nds->analog_patch = true;
+  nds->analog_full = req.nub;
   nds->analog_layout = req.extended ? ds::NDS::AnalogLayout::Extended : ds::NDS::AnalogLayout::Packed;
-  if (!on) {
-    for (auto& c : nds->cheats.codes) if (c.analog) c.enabled = false;
-    return;
-  }
   analog_on = true;
-  log(RETRO_LOG_INFO, "dsperate: analog patch \"%s\"%s\n", req.name ? req.name : "?", req.nub ? " (nub + ZL/ZR)" : "");
+  log(RETRO_LOG_INFO, "dsperate: analog patch \"%s\"%s\n", req.name ? req.name : sel.c_str(), req.nub ? " (nub + ZL/ZR)" : "");
 }
 
 void flush_gba_save() {
@@ -527,6 +540,7 @@ RETRO_API bool retro_load_game(const retro_game_info* game) {
   have_rumble = env_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble_if) && rumble_if.set_rumble_state;
   if (!boot()) { nds.reset(); return false; }
   scan_gba();
+  scan_analog();
   declare_options();
   read_options();
   fs_auto = opt("dsperate_frameskip") != "disabled";
@@ -565,6 +579,8 @@ RETRO_API void retro_unload_game(void) {
   flush_gba_save();
   if (have_rumble) rumble_if.set_rumble_state(0, RETRO_RUMBLE_STRONG, 0);
   gba_choices.clear();
+  analog_names.clear();
+  analog_cheats = {};
   gba_path.clear();
   analog_on = false;
 #if DSPERATE_JIT

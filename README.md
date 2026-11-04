@@ -36,7 +36,7 @@ where it runs 2.4-3.2x faster than melonDS DS on the same frames.
 | `dsperate_gba_game` | none, then the GBA games the DS game accepts | the list is rebuilt when a game loads, from `$DSPERATE_GBA_DIR` or the `Game Boy Advance` folder beside the DS one, filtered by DSperate's own dual-slot table. A GBA game's save is `<save dir>/<name>.sav` |
 | `dsperate_guitar_grip` | auto, off | the Grip goes in by itself for the Guitar Hero games; its frets are L, L2, R2, R |
 | `dsperate_solar` | 0-10 | Boktai's light level |
-| `dsperate_analog` | off, auto | feed the sticks to the game's CPAD patch. Off by default: on a handheld whose stick is also the pen cursor both would move |
+| `dsperate_analog` | off, then the game's CPAD patches by name | enable one analog (CPAD) patch and feed it the sticks and ZL/ZR. Off by default, as in DSperate's own frontend, where the player enables one; on a handheld whose stick is also the pen cursor both would move |
 
 A frontend only accepts a stored value the core offers, so `dsperate_gba_game`
 is declared again after the DS game is known and before its value is read.
