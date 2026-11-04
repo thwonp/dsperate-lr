@@ -12,13 +12,22 @@
 #include "core/nds.h"
 #include "core/host_cores.h"
 #include "core/state/state.h"
+#include "core/input/input_log.h"
+#include "core/slot2/slot2.h"
+#include "core/slot2/compat.h"
+#include "core/cheat/database.h"
+#include "core/cheat/ar_engine.h"
 #if DSPERATE_JIT
 #include "core/cpu/jit/jit.h"
 #endif
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <strings.h>
+#include <algorithm>
+#include <dirent.h>
 #include <memory>
 #include <string>
 #include <vector>
@@ -42,6 +51,15 @@ uint32_t frame[W * H * 2];
 ds::s16 audio[4096 * 2];
 size_t state_size;   // fixed for the session: libretro states are a fixed size
 
+// Slot 2 (DSperate v3.2.0): a GBA game, the Rumble Pak or the Guitar Grip,
+// chosen the way DSperate's own frontend does it (main.cpp fill_slot2).
+retro_rumble_interface rumble_if;
+bool have_rumble;
+std::string gba_path;          // the GBA game in slot 2, "" for none
+std::string gba_save_path;
+unsigned gba_writes_seen, rumble_seen, rumble_off_in;
+bool analog_on;                // an enabled CPAD patch is being fed the sticks
+std::string gba_dir_guess;
 // The frontend's microphone, when it has one (plorpOS plorpos-3yv.75). Opened
 // the first time the game reads the mic (Io::mic_used), so a game that never
 // listens never holds the device open. Io::set_mic takes any rate.
@@ -118,6 +136,140 @@ bool boot() {
   return true;
 }
 
+
+// ---- Slot 2, rumble, grip, analog (DSperate v3.2.0 / v3.1.0 parity) --------
+
+std::string opt(const char* key) {
+  retro_variable v{key, nullptr};
+  return env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &v) && v.value ? v.value : "";
+}
+
+std::string stem_of(const std::string& p) {
+  std::string b = p.substr(p.find_last_of('/') + 1);
+  return b.substr(0, b.find_last_of('.'));
+}
+
+struct GbaChoice { std::string stem, path; };
+std::vector<GbaChoice> gba_choices;   // the GBA games the loaded DS game reads
+
+// Where GBA games live: DSPERATE_GBA_DIR, else the GBA folder beside the DS
+// one (plorpOS's Roms/<system>/ layout).
+std::string gba_dir() {
+  if (const char* e = std::getenv("DSPERATE_GBA_DIR")) return e;
+  std::string d = rom_path.substr(0, rom_path.find_last_of('/'));
+  return d.substr(0, d.find_last_of('/')) + "/Game Boy Advance";
+}
+
+// Only the games the DS game accepts (DSperate's own dual-slot table), as its
+// frontend's picker offers them.
+void scan_gba() {
+  gba_choices.clear();
+  if (!nds || !nds->cart || nds->dsi) return;
+  const ds::slot2::Linkage* link = ds::slot2::linkage_for(nds->cart->header().game_code);
+  if (!link) return;
+  const std::string dir = gba_dir();
+  DIR* d = opendir(dir.c_str());
+  if (!d) return;
+  while (const dirent* e = readdir(d)) {
+    const std::string n = e->d_name;
+    if (n.size() < 5 || strcasecmp(n.c_str() + n.size() - 4, ".gba") != 0) continue;
+    const std::string stem = n.substr(0, n.size() - 4);
+    if (stem.find_first_of("|;") != std::string::npos) continue;   // would break the option list
+    char code[5], title[13];
+    if (ds::slot2::peek_game(dir + "/" + n, code, title) && ds::slot2::accepts(*link, code))
+      gba_choices.push_back({stem, dir + "/" + n});
+  }
+  closedir(d);
+  std::sort(gba_choices.begin(), gba_choices.end(), [](const GbaChoice& a, const GbaChoice& b) { return a.stem < b.stem; });
+}
+
+// The option list. The GBA game's values are only known once the DS game is
+// (after load), and a frontend accepts a stored choice only if it is offered,
+// so this is declared again before the choice is read.
+void declare_options() {
+  static std::string gba_decl;
+  gba_decl = "GBA game in slot 2 (restart); none";
+  for (const GbaChoice& c : gba_choices) gba_decl += "|" + c.stem;
+  const retro_variable vars[] = {
+    {"dsperate_jit", "JIT recompiler (restart); enabled|disabled"},
+    {"dsperate_slot2", "Slot 2 without a GBA game (restart); auto|rumble pak|empty"},
+    {"dsperate_gba_game", gba_decl.c_str()},
+    {"dsperate_guitar_grip", "Guitar Grip for Guitar Hero (restart); auto|off"},
+    {"dsperate_solar", "GBA solar sensor light (Boktai); 5|0|1|2|3|4|6|7|8|9|10"},
+    {"dsperate_analog", "Sticks for analog (CPAD) patches (restart); auto|off"},
+    {nullptr, nullptr},
+  };
+  env_cb(RETRO_ENVIRONMENT_SET_VARIABLES, const_cast<retro_variable*>(vars));
+}
+
+void fill_slot2() {
+  nds->slot2.reset();
+  gba_path.clear();
+  if (nds->dsi || !nds->cart) return;
+  const std::string sel = opt("dsperate_gba_game");
+  if (!sel.empty() && sel != "none") {
+    for (const GbaChoice& c : gba_choices) {
+      if (c.stem != sel) continue;
+      const std::string save_dir = dir(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY);
+      const std::string sav = (save_dir.empty() ? c.path.substr(0, c.path.find_last_of('.')) : save_dir + "/" + c.stem) + ".sav";
+      std::string err;
+      if (auto g = ds::slot2::load_game(c.path, sav, err)) {
+        g->set_light_level(std::atoi(opt("dsperate_solar").c_str()));
+        log(RETRO_LOG_INFO, "dsperate: slot 2: %s [%s], save %s\n", c.stem.c_str(), g->game_code(), ds::slot2::save_type_name(g->save_type()));
+        gba_path = sav;
+        nds->slot2 = std::move(g);
+        return;
+      }
+      log(RETRO_LOG_ERROR, "dsperate: slot 2: %s\n", err.c_str());
+    }
+  }
+  if (opt("dsperate_guitar_grip") != "off" && ds::slot2::uses_guitar_grip(nds->cart->header().game_code)) {
+    nds->slot2 = std::make_unique<ds::slot2::GuitarGrip>();
+    log(RETRO_LOG_INFO, "dsperate: slot 2: Guitar Grip\n");
+    return;
+  }
+  const std::string m = opt("dsperate_slot2");
+  if (m == "rumble pak" || (m != "empty" && have_rumble)) {
+    nds->slot2 = std::make_unique<ds::slot2::RumblePak>();
+    log(RETRO_LOG_INFO, "dsperate: slot 2: Rumble Pak\n");
+  }
+}
+
+// Analog patches (shocoman's CPAD codes, built in): the game's entry is merged
+// into the cheat list, its default-enabled code installs the hook, and the
+// frame's sticks go to guest RAM while a patch is on (input::apply).
+void setup_analog() {
+  analog_on = false;
+  if (!nds->cart || nds->dsi) return;
+  ds::u8 header[512] = {};
+  nds->cart->rom_read(0, header, sizeof header);
+  ds::cheat::GameCheats cheats, analog;
+  std::string err;
+  if (!ds::cheat::load_analog_for_header("", header, analog, err)) return;
+  if (!ds::cheat::merge_analog(cheats, std::move(analog), ds::cheat::header_checksum(header))) return;
+  nds->cheats.codes = cheats.codes;
+  ds::cheat::enforce_exclusive(nds->cheats.codes, cheats.groups);
+  const ds::cheat::AnalogRequest req = ds::cheat::analog_request(nds->cheats.codes);
+  const bool on = opt("dsperate_analog") != "off" && req.schemes > 0;
+  nds->analog_patch = on;
+  nds->analog_full = on && req.nub;
+  nds->analog_layout = req.extended ? ds::NDS::AnalogLayout::Extended : ds::NDS::AnalogLayout::Packed;
+  if (!on) {
+    for (auto& c : nds->cheats.codes) if (c.analog) c.enabled = false;
+    return;
+  }
+  analog_on = true;
+  log(RETRO_LOG_INFO, "dsperate: analog patch \"%s\"%s\n", req.name ? req.name : "?", req.nub ? " (nub + ZL/ZR)" : "");
+}
+
+void flush_gba_save() {
+  const ds::slot2::GameCart* g = nds ? nds->gba_cart() : nullptr;
+  if (!g || !g->save_dirty() || gba_path.empty()) return;
+  std::string err;
+  if (ds::slot2::write_save(*g, gba_path, err)) const_cast<ds::slot2::GameCart*>(g)->clear_save_dirty();
+  else log(RETRO_LOG_ERROR, "dsperate: GBA save: %s\n", err.c_str());
+}
+
 } // namespace
 
 extern "C" {
@@ -126,11 +278,7 @@ RETRO_API unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 
 RETRO_API void retro_set_environment(retro_environment_t cb) {
   env_cb = cb;
-  static const retro_variable vars[] = {
-    {"dsperate_jit", "JIT recompiler (restart); enabled|disabled"},
-    {nullptr, nullptr},
-  };
-  cb(RETRO_ENVIRONMENT_SET_VARIABLES, const_cast<retro_variable*>(vars));
+  declare_options();
   retro_log_callback l{};
   if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &l)) log_cb = l.log;
 }
@@ -188,18 +336,43 @@ RETRO_API void retro_run(void) {
     {RETRO_DEVICE_ID_JOYPAD_LEFT, ds::io::Io::BTN_LEFT},     {RETRO_DEVICE_ID_JOYPAD_RIGHT, ds::io::Io::BTN_RIGHT},
   };
   input_poll_cb();
+  ds::input::Frame in;
   ds::u32 pressed = 0;
   for (const auto& m : map)
     if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, m.id)) pressed |= 1u << m.btn;
-  nds->io.set_buttons(pressed);
+  // The Guitar Grip's frets are the shoulders and triggers (DSperate's
+  // defaults: L, L2, R2, R = green, red, yellow, blue); they are not the DS's
+  // own L and R while the grip is in.
+  if (nds->slot2 && nds->slot2->kind() == ds::slot2::Kind::GuitarGrip) {
+    static const unsigned fret_id[4] = {RETRO_DEVICE_ID_JOYPAD_L, RETRO_DEVICE_ID_JOYPAD_L2,
+                                        RETRO_DEVICE_ID_JOYPAD_R2, RETRO_DEVICE_ID_JOYPAD_R};
+    for (int i = 0; i < 4; ++i)
+      if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, fret_id[i])) in.frets |= 1u << i;
+    pressed &= ~((1u << ds::io::Io::BTN_L) | (1u << ds::io::Io::BTN_R));
+  }
+  in.buttons = static_cast<ds::u16>(pressed);
 
   // The pointer spans the whole frame, the two screens stacked: the bottom
   // (touch) screen is y 0..0x7fff of -0x7fff..0x7fff.
   const bool down = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
   const int px = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
   const int py = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
-  if (down && py >= 0) nds->io.set_touch((px + 0x7fff) * int(W) / 0xffff, py * int(H) / 0x8000, true);
-  else nds->io.set_touch(0, 0, false);
+  if (down && py >= 0) {
+    in.down = true;
+    in.x = static_cast<ds::u8>((px + 0x7fff) * int(W) / 0xffff);
+    in.y = static_cast<ds::u8>(py * int(H) / 0x8000);
+  }
+
+  // Both sticks and the triggers, for an analog (CPAD) patch; the core only
+  // forwards them while one is on. Libretro's axes are the SDL range.
+  if (analog_on) {
+    in.cpad_x = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
+    in.cpad_y = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
+    in.cstick_x = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
+    in.cstick_y = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+    in.zl = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2);
+    in.zr = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
+  }
 
   if (!mic && mic_if.open_mic && nds->io.mic_used()) {
     retro_microphone_params_t p{MIC_RATE};
@@ -210,10 +383,30 @@ RETRO_API void retro_run(void) {
   }
   if (mic) {
     const int n = mic_if.read_mic(mic, mic_buf, sizeof mic_buf / sizeof mic_buf[0]);
-    nds->io.set_mic(n > 0 ? mic_buf : nullptr, n > 0 ? size_t(n) : 0);
+    ds::input::apply(*nds, in, n > 0 ? mic_buf : nullptr, n > 0 ? size_t(n) : 0);
+  } else {
+    ds::input::apply(*nds, in);
   }
 
   nds->run_frame();
+
+  // The Rumble Pak's motor line: any change is a short pulse (40 ms = 3
+  // frames), DSperate's own frontend does the same.
+  if (nds->slot2 && have_rumble) {
+    if (nds->slot2->rumble_events() != rumble_seen) {
+      rumble_seen = nds->slot2->rumble_events();
+      rumble_if.set_rumble_state(0, RETRO_RUMBLE_STRONG, 0xffff);
+      rumble_off_in = 3;
+    } else if (rumble_off_in && --rumble_off_in == 0) {
+      rumble_if.set_rumble_state(0, RETRO_RUMBLE_STRONG, 0);
+    }
+  }
+  // A GBA game's save goes to its file once it has been quiet a second.
+  if (const ds::slot2::GameCart* g = nds->gba_cart(); g && g->save_dirty()) {
+    static unsigned quiet;
+    if (g->save_writes() != gba_writes_seen) { gba_writes_seen = g->save_writes(); quiet = 0; }
+    else if (++quiet >= 60) { flush_gba_save(); quiet = 0; }
+  }
 
   std::memcpy(frame, nds->gpu.framebuffer(0), W * H * 4);
   std::memcpy(frame + W * H, nds->gpu.framebuffer(1), W * H * 4);
@@ -288,10 +481,21 @@ RETRO_API bool retro_load_game(const retro_game_info* game) {
   if (!game || !game->path) return false;
   retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;   // DSperate's 0xAARRGGBB, alpha ignored
   if (!env_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) return false;
-  read_options();
   rom_path = game->path;
   nds = std::make_unique<ds::NDS>();
+  // The options are read after the GBA games this DS game reads are known and
+  // listed (a stored choice is only accepted if it is offered).
+  rumble_if = {};
+  have_rumble = env_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble_if) && rumble_if.set_rumble_state;
   if (!boot()) { nds.reset(); return false; }
+  scan_gba();
+  declare_options();
+  read_options();
+  fill_slot2();   // before anything runs: a game looks for slot 2 in its first frames
+  setup_analog();
+  rumble_seen = nds->slot2 ? nds->slot2->rumble_events() : 0;
+  rumble_off_in = 0;
+  gba_writes_seen = 0;
   load_unlisted_save();
   register_memory_map();
 #if DSPERATE_JIT
@@ -312,6 +516,11 @@ RETRO_API bool retro_load_game_special(unsigned, const retro_game_info*, size_t)
 RETRO_API void retro_unload_game(void) {
   if (mic) { mic_if.close_mic(mic); mic = nullptr; }
   if (!nds) return;
+  flush_gba_save();
+  if (have_rumble) rumble_if.set_rumble_state(0, RETRO_RUMBLE_STRONG, 0);
+  gba_choices.clear();
+  gba_path.clear();
+  analog_on = false;
 #if DSPERATE_JIT
   if (jit_on) ds::jit::detach(*nds);
 #endif
