@@ -261,6 +261,7 @@ void scan_analog() {
   if (!ds::cheat::merge_analog(analog_cheats, std::move(analog), ds::cheat::header_checksum(header))) return;
   for (const ds::cheat::Code& c : analog_cheats.codes)
     if (c.analog && !c.is_note() && c.name.find_first_of("|;") == std::string::npos) analog_names.push_back(c.name);
+  for (const std::string& n : analog_names) log(RETRO_LOG_INFO, "dsperate: analog patch available: %s\n", n.c_str());
 }
 
 void setup_analog() {
