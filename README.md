@@ -2,7 +2,7 @@
 
 A [libretro](https://www.libretro.com/) core around
 [DSperate](https://github.com/beebono/DSperate), the Nintendo DS emulator that
-reimplements DraStic's techniques. DSperate is a submodule pinned to a release;
+reimplements DraStic's techniques. DSperate is a submodule pinned to a release (v3.3.0);
 this repository adds only the libretro wrapper and its build.
 
 Made for [plorpOS](https://github.com/thwonp/plorpOS) on the Anbernic RG Rotate,
