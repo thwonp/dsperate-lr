@@ -472,7 +472,10 @@ RETRO_API size_t retro_serialize_size(void) {
   if (!state_size && nds) {
     std::string err;
     state_w.data().clear();
-    if (nds->save_state(state_w, err)) state_size = 4 + state_w.data().size() + 256 * 1024;
+    // A later scene's state is bigger (Pearl 6.48 -> 6.57 MB, Golden Sun +2 %,
+    // NSMB +0.6 %): an upper bound, not the first state plus a little. The
+    // pad is zeros, which the frontend's compressed rewind stores for nothing.
+    if (nds->save_state(state_w, err)) state_size = (4 + state_w.data().size()) * 5 / 4 + 256 * 1024;
   }
   return state_size;
 }
