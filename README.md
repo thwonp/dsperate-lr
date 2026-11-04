@@ -31,7 +31,7 @@ where it runs 2.4-3.2x faster than melonDS DS on the same frames.
 | option | values | what |
 |---|---|---|
 | `dsperate_jit` | enabled, disabled | JIT recompiler |
-| `dsperate_frameskip` | auto, disabled | frame skip when the frontend asks (below) |
+| `dsperate_frameskip` | auto, slotplus, disabled | frame skip when the frontend asks (below): `auto` skips the frames it flags, `slotplus` skips whole display periods |
 | `dsperate_slot2` | auto, rumble pak, empty | slot 2 when no GBA game is chosen: `auto` is a Rumble Pak if the frontend has a rumble motor |
 | `dsperate_gba_game` | none, then the GBA games the DS game accepts | the list is rebuilt when a game loads, from `$DSPERATE_GBA_DIR` or the `Game Boy Advance` folder beside the DS one, filtered by DSperate's own dual-slot table. A GBA game's save is `<save dir>/<name>.sav` |
 | `dsperate_guitar_grip` | auto, off | the Grip goes in by itself for the Guitar Hero games; its frets are L, L2, R2, R |
@@ -53,15 +53,24 @@ runs late on heavy 3D scenes. The three pieces:
    libretro's audio buffer status callback (`underrun_likely`). plorpOS's
    Diatom does it on the Brick and H700 when a frame is more than 8 ms behind
    (`DIATOM_FRAMESKIP_MS`); on its other ports it never does, so nothing skips.
-2. **This wrapper** (`dsperate_frameskip = auto`) turns the hint into
-   `gpu.set_frame_skip()` for whole display periods, at most two in a row, then
-   one frame is drawn, and returns `video_cb(nullptr)` for skipped frames.
+2. **This wrapper** turns the hint into `gpu.set_frame_skip()`. With
+   `dsperate_frameskip = auto` it skips exactly the frames the frontend flags
+   (what plorpOS tuned). With `slotplus` it skips whole display periods, at most
+   two in a row, then draws one, and returns `video_cb(nullptr)` for skipped
+   frames.
 3. **DSperate** decides one frame ahead, so a skip asked for now lands on the
    next frame.
 
-The design is [slotPlus](https://github.com/nelynes/slotPlus)'s
-(`cores/dsperate/wrapper-0001-frameskip.patch`, suggested by crobledo); plorpOS
-carried an earlier simpler version as a TortOS patch before folding this in.
+Measured on an RG34XXSP (H700), 30 s each, plorpOS's Diatom: Golden Sun: Dark
+Dawn needs 3 skips with `auto`, 469 with `slotplus` (which also dropped 436
+audio frames, the core running ahead of the audio); NSMB held 59.6 fps with
+`auto` and no audio loss. `slotplus` may suit a frontend whose lateness
+estimate was tuned for whole periods.
+
+The `slotplus` mode is [slotPlus](https://github.com/nelynes/slotPlus)'s
+(`cores/dsperate/wrapper-0001-frameskip.patch`, suggested by crobledo); `auto`
+is plorpOS's earlier, simpler version, which was a TortOS patch before it
+moved in here.
 If frames still run late with `auto`, the cause is the frontend's lateness
 estimate, not the audio: look at the frontend's skip rule first.
 
