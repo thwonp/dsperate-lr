@@ -192,6 +192,7 @@ void declare_options() {
   for (const GbaChoice& c : gba_choices) gba_decl += "|" + c.stem;
   const retro_variable vars[] = {
     {"dsperate_jit", "JIT recompiler (restart); enabled|disabled"},
+    {"dsperate_frameskip", "Frameskip, when the frontend asks for it (restart); auto|disabled"},
     {"dsperate_slot2", "Slot 2 without a GBA game (restart); auto|rumble pak|empty"},
     {"dsperate_gba_game", gba_decl.c_str()},
     {"dsperate_guitar_grip", "Guitar Grip for Guitar Hero (restart); auto|off"},
@@ -291,20 +292,26 @@ RETRO_API void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { aud
 RETRO_API void retro_set_input_poll(retro_input_poll_t cb) { input_poll_cb = cb; }
 RETRO_API void retro_set_input_state(retro_input_state_t cb) { input_state_cb = cb; }
 
-// Idea and approach: nelynes's slotPlus (https://github.com/nelynes/slotPlus).
-// The frontend's "this frame will run late" (the audio buffer status
-// callback's underrun_likely): the GPU then leaves out its 3D raster and line
-// output for the frame (the game, the CPUs and the sound run unchanged), the
-// same frame skip RetroArch drives from the audio buffer. A frontend that
-// never calls it never skips (plorpOS: the Brick and H700 builds of diatom).
-static bool skip_req;
-static void audio_status(bool, unsigned, bool underrun_likely) { skip_req = underrun_likely; }
+// Frame skip, driven by the frontend (plorpOS TortOS plorpos-reo.21.7; the
+// design is nelynes's slotPlus, https://github.com/nelynes/slotPlus,
+// cores/dsperate/wrapper-0001-frameskip.patch, suggested by crobledo).
+// With dsperate_frameskip = auto the frontend says, through the audio buffer
+// status callback, which frames it would rather not have drawn (its underrun
+// flag), and DSperate's adaptive frame skip skips whole display periods while
+// it does - at most FS_LIMIT in a row, then one is drawn. Only the 3D raster
+// and line output are left out: the game, both CPUs and the SOUND run
+// unchanged, so audio is never touched by a skip. DSperate decides one frame
+// ahead, so a skip asked for now lands on the next frame, and the frame the
+// frontend presents then is the last one drawn (video_cb(nullptr)).
+// A frontend that never calls the callback (plorpOS: every diatom port except
+// the Brick and H700) never skips.
+constexpr int FS_LIMIT = 2;
+bool fs_auto = true;
+bool fs_behind, fs_in_skip;
+int fs_left, fs_blocks;
+void RETRO_CALLCONV fs_status(bool active, unsigned, bool underrun) { fs_behind = active && underrun; }
 
-RETRO_API void retro_init(void) {
-  ds::set_thread_layout(false);
-  retro_audio_buffer_status_callback ab{audio_status};
-  if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK, &ab);
-}
+RETRO_API void retro_init(void) { ds::set_thread_layout(false); }
 RETRO_API void retro_deinit(void) {}
 
 RETRO_API void retro_get_system_info(retro_system_info* info) {
@@ -403,7 +410,18 @@ RETRO_API void retro_run(void) {
     ds::input::apply(*nds, in);
   }
 
-  nds->gpu.set_frame_skip(skip_req);
+  if (fs_auto) {
+    if (fs_left == 0) {   // a block ended: pick the next one
+      const bool skip = fs_behind && fs_blocks < FS_LIMIT;
+      fs_blocks = skip ? fs_blocks + 1 : 0;
+      fs_in_skip = skip;
+      fs_left = nds->gpu.display_phase_period();
+    }
+    --fs_left;
+    nds->gpu.set_frame_skip(fs_in_skip);
+  } else {
+    nds->gpu.set_frame_skip(false);
+  }
   nds->run_frame();
 
   // The Rumble Pak's motor line: any change is a short pulse (40 ms = 3
@@ -424,9 +442,13 @@ RETRO_API void retro_run(void) {
     else if (++quiet >= 60) { flush_gba_save(); quiet = 0; }
   }
 
-  std::memcpy(frame, nds->gpu.framebuffer(0), W * H * 4);
-  std::memcpy(frame + W * H, nds->gpu.framebuffer(1), W * H * 4);
-  video_cb(frame, W, H * 2, W * 4);
+  if (nds->gpu.will_skip_frame()) {
+    video_cb(nullptr, W, H * 2, W * 4);   // nothing new drawn: show the last frame again
+  } else {
+    std::memcpy(frame, nds->gpu.framebuffer(0), W * H * 4);
+    std::memcpy(frame + W * H, nds->gpu.framebuffer(1), W * H * 4);
+    video_cb(frame, W, H * 2, W * 4);
+  }
   for (size_t n; (n = nds->spu.take(audio, 4096)) != 0;) audio_batch_cb(audio, n);
 }
 
@@ -507,6 +529,7 @@ RETRO_API bool retro_load_game(const retro_game_info* game) {
   scan_gba();
   declare_options();
   read_options();
+  fs_auto = opt("dsperate_frameskip") != "disabled";
   fill_slot2();   // before anything runs: a game looks for slot 2 in its first frames
   setup_analog();
   rumble_seen = nds->slot2 ? nds->slot2->rumble_events() : 0;
@@ -521,6 +544,13 @@ RETRO_API bool retro_load_game(const retro_game_info* game) {
   }
 #endif
   state_size = 0;
+  fs_behind = fs_in_skip = false;
+  fs_left = fs_blocks = 0;
+  if (fs_auto) {
+    nds->gpu.set_frameskip_capture(true);
+    retro_audio_buffer_status_callback cb{fs_status};
+    if (!env_cb(RETRO_ENVIRONMENT_SET_AUDIO_BUFFER_STATUS_CALLBACK, &cb)) fs_auto = false;
+  }
   mic_if = {};
   mic_if.interface_version = RETRO_MICROPHONE_INTERFACE_VERSION;
   if (!env_cb(RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE, &mic_if)) mic_if = {};
